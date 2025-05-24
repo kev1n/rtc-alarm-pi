@@ -372,6 +372,9 @@ class BluetoothAlarmManager:
             if not self.alarm_clock.alarms:
                 response = "OK:LIST:0"
                 self._send_response(response)
+                # Send explicit clear message
+                time.sleep(0.1)  # Small delay
+                self._send_response("OK:CLEAR")
                 return
                 
             # Send count first
@@ -379,20 +382,38 @@ class BluetoothAlarmManager:
             response = f"OK:LIST:{count}"
             self._send_response(response)
             
-            # Send each alarm separately (to avoid size limits)
+            # Send each alarm in readable format with delays
             for i, alarm in enumerate(self.alarm_clock.alarms):
+                # Add delay to prevent BLE buffer overflow
+                time.sleep(0.15)  # 150ms delay between responses
+                
                 next_trigger = self.alarm_clock._calculate_next_trigger(alarm)
                 time_until = self.alarm_clock._format_time_until(next_trigger) if next_trigger else "unknown"
+                
+                # Truncate name to reasonable size (max 12 chars)
+                alarm_name = alarm.name[:12] if len(alarm.name) > 12 else alarm.name
+                
+                # Truncate time_until to reasonable size (max 25 chars)
+                if len(time_until) > 25:
+                    time_until = time_until[:22] + "..."
                 
                 status = "ON" if alarm.enabled else "OFF"
                 rec = "R" if alarm.recurring else "O"
                 
-                # Format: INDEX:NAME:HH:MM:STATUS:TYPE:TIME_UNTIL
-                alarm_response = f"ALARM:{i}:{alarm.name}:{alarm.hour:02d}:{alarm.minute:02d}:{status}:{rec}:{time_until}"
+                # Readable format: ALARM:INDEX:NAME:HH:MM:STATUS:TYPE:TIME_UNTIL
+                alarm_response = f"ALARM:{i}:{alarm_name}:{alarm.hour:02d}:{alarm.minute:02d}:{status}:{rec}:{time_until}"
+                
+                # Should now fit in larger MTU (aiming for <150 chars)
+                if len(alarm_response) > 150:
+                    # Create shorter version if still too long
+                    short_time = time_until[:15] + "..." if len(time_until) > 15 else time_until
+                    short_name = alarm_name[:8] if len(alarm_name) > 8 else alarm_name
+                    alarm_response = f"ALARM:{i}:{short_name}:{alarm.hour:02d}:{alarm.minute:02d}:{status}:{rec}:{short_time}"
+                
                 self._send_response(alarm_response)
                 
         except Exception as e:
-            self._send_error_response(f"List alarms error: {e}")
+            self._send_error_response(f"List error: {e}")
             
     def _handle_status_request_compact(self):
         """Handle STATUS request - Format: s"""
@@ -424,15 +445,20 @@ class BluetoothAlarmManager:
             self._send_error_response(f"Ping error: {e}")
             
     def _send_response(self, response_str):
-        """Send response via BLE (compact format)"""
+        """Send response via BLE (with larger MTU support)"""
         try:
             self.response_buffer = response_str
             
             if self.connected and self.conn_handle is not None:
+                # With larger MTU, we can send much bigger responses
+                if len(response_str.encode('utf-8')) > 180:  # Conservative limit for 185 MTU
+                    print(f"⚠️ Response too long ({len(response_str)} chars), truncating: {response_str}")
+                    response_str = response_str[:177] + "..."
+                    
                 self.ble.gatts_write(self.response_handle, response_str.encode('utf-8'))
                 self.ble.gatts_notify(self.conn_handle, self.response_handle)
                 
-            print(f"📤 Sent response: {response_str}")
+            print(f"📤 Sent response: {response_str} (length: {len(response_str)})")
             
         except Exception as e:
             print(f"❌ Error sending response: {e}")

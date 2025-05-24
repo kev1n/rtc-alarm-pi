@@ -1,0 +1,67 @@
+{
+  "name": "pi-alarm-clock-app",
+  "version": "1.0.0",
+  "description": "React Native app for managing Raspberry Pi Pico W alarm clock over Bluetooth",
+  "main": "node_modules/expo/AppEntry.js",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "web": "expo start --web",
+    "build:android": "eas build --platform android",
+    "build:ios": "eas build --platform ios",
+    "build:all": "eas build --platform all",
+    "lint": "eslint . --ext .ts,.tsx",
+    "test": "jest"
+  },
+  "keywords": [
+    "react-native",
+    "expo",
+    "bluetooth",
+    "alarm-clock",
+    "raspberry-pi",
+    "pico-w",
+    "ble",
+    "iot"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "dependencies": {
+    "@expo/vector-icons": "~14.0.4",
+    "@react-native-async-storage/async-storage": "^2.1.2",
+    "eas-cli": "~16.6.2",
+    "expo": "~52.0.17",
+    "expo-dev-client": "~5.0.20",
+    "expo-device": "~7.0.3",
+    "expo-font": "~13.0.4",
+    "expo-status-bar": "~2.0.0",
+    "react": "18.3.1",
+    "react-native": "~0.76.9",
+    "react-native-base64": "~0.2.1",
+    "react-native-ble-plx": "~3.5.0",
+    "react-native-safe-area-context": "~4.12.0",
+    "react-native-screens": "~4.4.0"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.20.0",
+    "@types/react": "~18.3.12",
+    "@types/react-native-base64": "^0.2.2",
+    "@typescript-eslint/eslint-plugin": "^5.59.0",
+    "@typescript-eslint/parser": "^5.59.0",
+    "eslint": "^8.39.0",
+    "eslint-plugin-react": "^7.32.2",
+    "eslint-plugin-react-hooks": "^4.6.0",
+    "jest": "^29.2.1",
+    "typescript": "~5.3.3"
+  },
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/rtc-alarm-pi.git",
+    "directory": "AlarmClockApp"
+  },
+  "bugs": {
+    "url": "https://github.com/yourusername/rtc-alarm-pi/issues"
+  },
+  "homepage": "https://github.com/yourusername/rtc-alarm-pi#readme"
+}

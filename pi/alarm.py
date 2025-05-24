@@ -1,8 +1,9 @@
 from machine import Pin, I2C
 import time
-from picozero import pico_led
+from picozero import pico_led # type: ignore
 import json
 from DS3231 import DS3231
+from bluetooth_alarm_manager import BluetoothAlarmManager
 
 class Alarm:
     def __init__(self, hour, minute, days=None, name="Alarm", enabled=True, recurring=True):
@@ -314,10 +315,14 @@ class AlarmClock:
             except Exception as e:
                 print(f"Error checking alarm '{alarm.name}': {e}")
                 
-    def run(self):
-        """Main alarm clock loop"""
+    def run(self, bluetooth_manager=None):
+        """Main alarm clock loop with optional Bluetooth support"""
         print("🕐 Alarm Clock Started 🕐")
         self.list_alarms()
+        
+        if bluetooth_manager:
+            print("🔵 Bluetooth support enabled")
+            bluetooth_manager.start_advertising()
         
         consecutive_errors = 0
         max_errors = 5
@@ -336,6 +341,10 @@ class AlarmClock:
                     # Check alarms
                     self.check_alarms(current_time)
                     
+                    # Run Bluetooth tasks if available
+                    if bluetooth_manager:
+                        bluetooth_manager.run_bluetooth_tasks()
+                    
                     # Blink LED every 5 seconds (original functionality)
                     if second % 5 == 0:
                         pico_led.on()
@@ -349,6 +358,8 @@ class AlarmClock:
                     
             except KeyboardInterrupt:
                 print("\nAlarm clock stopped by user")
+                if bluetooth_manager:
+                    bluetooth_manager.stop_advertising()
                 break
             except Exception as e:
                 consecutive_errors += 1
@@ -371,7 +382,7 @@ def setup_example_alarms():
         rtc = DS3231(i2c)
     except Exception as e:
         print(f"Error initializing I2C/RTC: {e}")
-        return None
+        return None, None
         
     # Create alarm clock
     alarm_clock = AlarmClock(rtc)
@@ -401,14 +412,22 @@ def setup_example_alarms():
                              name="Test Alarm", 
                              recurring=False)
     
-    return alarm_clock
+    # Initialize Bluetooth manager
+    try:
+        bluetooth_manager = BluetoothAlarmManager(alarm_clock, "PicoAlarmClock")
+        print("✅ Bluetooth manager initialized successfully")
+        return alarm_clock, bluetooth_manager
+    except Exception as e:
+        print(f"⚠️ Bluetooth initialization failed: {e}")
+        print("📱 Running without Bluetooth support")
+        return alarm_clock, None
 
 # Run the alarm clock
 if __name__ == "__main__":
-    alarm_clock = setup_example_alarms()
+    alarm_clock, bluetooth_manager = setup_example_alarms()
     if alarm_clock:
         try:
-            alarm_clock.run()
+            alarm_clock.run(bluetooth_manager)
         except Exception as e:
             print(f"Fatal error: {e}")
             # Keep LED off on exit

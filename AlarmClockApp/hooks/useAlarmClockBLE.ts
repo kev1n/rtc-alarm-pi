@@ -30,6 +30,7 @@ export interface Alarm {
   recurring: boolean;
   timeUntil: string;
   days?: number[]; // 0=Monday, 6=Sunday
+  vibration_strength?: number; // 0-100, default 75
 }
 
 export interface DeviceStatus {
@@ -95,7 +96,7 @@ function useAlarmClockBLE() {
     try {
       // Handle both formats: original ALARM and compact A
       if (response.startsWith("ALARM:")) {
-        // Original format: ALARM:INDEX:NAME:HH:MM:STATUS:TYPE:TIME_UNTIL
+        // Updated format: ALARM:INDEX:NAME:HH:MM:STATUS:TYPE:TIME_UNTIL:VIBRATION_STRENGTH
         const parts = response.split(":");
         if (parts.length < 7) {
           console.error("Invalid ALARM response format:", response);
@@ -111,8 +112,36 @@ function useAlarmClockBLE() {
 
         // Handle timeUntil which might be split across multiple parts due to colons
         let timeUntil = "unknown";
+        let vibration_strength = 75; // Default value
+
         if (parts.length > 7) {
-          timeUntil = parts.slice(7).join(":") || "unknown"; // Rejoin in case time had colons
+          // If we have 9+ parts, the last one is vibration strength and the rest is time_until
+          if (parts.length >= 9) {
+            const lastPart = parts[parts.length - 1];
+            // Check if last part is a number (vibration strength)
+            const strengthNum = parseInt(lastPart);
+            if (!isNaN(strengthNum) && strengthNum >= 0 && strengthNum <= 100) {
+              vibration_strength = strengthNum;
+              timeUntil = parts.slice(7, -1).join(":") || "unknown";
+            } else {
+              timeUntil = parts.slice(7).join(":") || "unknown";
+            }
+          } else {
+            // Check if last part is vibration strength
+            const lastPart = parts[parts.length - 1];
+            const strengthNum = parseInt(lastPart);
+            if (
+              !isNaN(strengthNum) &&
+              strengthNum >= 0 &&
+              strengthNum <= 100 &&
+              parts.length === 8
+            ) {
+              vibration_strength = strengthNum;
+              timeUntil = "unknown";
+            } else {
+              timeUntil = parts.slice(7).join(":") || "unknown";
+            }
+          }
         }
 
         // Validate parsed values
@@ -134,6 +163,7 @@ function useAlarmClockBLE() {
           enabled,
           recurring,
           timeUntil,
+          vibration_strength,
         };
       } else if (response.startsWith("A")) {
         // Compact format: A{index}:{name}:{HHMM}:{enabled}:{recurring}:{minutes}
@@ -230,6 +260,7 @@ function useAlarmClockBLE() {
           enabled,
           recurring,
           timeUntil,
+          vibration_strength: 75, // Default for compact format (not included)
         };
       } else {
         console.error("Unknown alarm response format:", response);
@@ -644,7 +675,8 @@ function useAlarmClockBLE() {
       minute: number,
       name?: string,
       days?: number[],
-      recurring: boolean = true
+      recurring: boolean = true,
+      vibration_strength: number = 75
     ): Promise<boolean> => {
       let command = `a${hour.toString().padStart(2, "0")}:${minute
         .toString()
@@ -667,7 +699,23 @@ function useAlarmClockBLE() {
       // Add recurring flag
       command += recurring ? ":R" : ":O";
 
+      // Add vibration strength
+      command += `:${vibration_strength}`;
+
       return await sendCommand(command);
+    },
+    [sendCommand]
+  );
+
+  const previewVibration = useCallback(
+    async (strength: number = 75): Promise<boolean> => {
+      // Validate strength
+      if (strength < 0 || strength > 100) {
+        setError("Vibration strength must be between 0 and 100");
+        return false;
+      }
+
+      return await sendCommand(`v${strength}`);
     },
     [sendCommand]
   );
@@ -964,6 +1012,39 @@ function useAlarmClockBLE() {
     getStatus,
   ]);
 
+  const editAlarm = useCallback(
+    async (
+      index: number,
+      hour: number,
+      minute: number,
+      name?: string,
+      days?: number[],
+      recurring: boolean = true,
+      vibration_strength?: number
+    ): Promise<boolean> => {
+      // For now, editing means removing the old alarm and adding a new one
+      // This is a limitation of the current protocol but ensures consistency
+      const success = await removeAlarm(index);
+      if (!success) {
+        return false;
+      }
+
+      // Small delay to ensure removal is processed
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      // Add the updated alarm
+      return await addAlarm(
+        hour,
+        minute,
+        name,
+        days,
+        recurring,
+        vibration_strength || 75 // Use provided value or 75 as fallback
+      );
+    },
+    [removeAlarm, addAlarm]
+  );
+
   return {
     // Device management
     allDevices,
@@ -989,6 +1070,8 @@ function useAlarmClockBLE() {
     addAlarm,
     removeAlarm,
     toggleAlarm,
+    previewVibration,
+    editAlarm,
 
     // Utilities
     onResponse,

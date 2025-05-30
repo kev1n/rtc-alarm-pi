@@ -243,6 +243,8 @@ class BluetoothAlarmManager:
                 self._handle_status_request_compact()
             elif cmd_type == 'p':  # Ping
                 self._handle_ping_compact()
+            elif cmd_type == 'v':  # Vibration preview
+                self._handle_vibration_preview_compact(command_str)
             else:
                 self._send_error_response(f"Unknown command: {cmd_type}")
                 
@@ -250,18 +252,18 @@ class BluetoothAlarmManager:
             self._send_error_response(f"Command error: {e}")
             
     def _handle_add_alarm_compact(self, command_str):
-        """Handle ADD alarm command - Format: aHH:MM[:days][:name][:R/O]
+        """Handle ADD alarm command - Format: aHH:MM[:days][:name][:R/O][:strength]
         Examples:
-        a07:30 - Daily alarm at 7:30
-        a06:30:0,1,2,3,4 - Weekday alarm at 6:30
-        a09:00:5,6:Weekend:R - Weekend recurring alarm
-        a15:30::Meeting:O - One-time alarm at 3:30 PM
+        a07:30 - Daily alarm at 7:30 (default 75% strength)
+        a06:30:0,1,2,3,4 - Weekday alarm at 6:30 (default 75% strength)
+        a09:00:5,6:Weekend:R:85 - Weekend recurring alarm with 85% strength
+        a15:30::Meeting:O:50 - One-time alarm at 3:30 PM with 50% strength
         """
         try:
             parts = command_str[1:].split(':')  # Remove 'a' prefix
             
             if len(parts) < 2:
-                self._send_error_response("Format: aHH:MM[:days][:name][:R/O]")
+                self._send_error_response("Format: aHH:MM[:days][:name][:R/O][:strength]")
                 return
                 
             # Parse hour and minute
@@ -288,6 +290,18 @@ class BluetoothAlarmManager:
             if len(parts) > 4 and parts[4]:
                 recurring = parts[4].upper() != 'O'  # 'O' = One-time, anything else = Recurring
                 
+            # Parse vibration strength (optional)
+            vibration_strength = 75  # Default to 75%
+            if len(parts) > 5 and parts[5]:
+                try:
+                    vibration_strength = int(parts[5])
+                    if not (0 <= vibration_strength <= 100):
+                        self._send_error_response("Vibration strength must be 0-100")
+                        return
+                except ValueError:
+                    self._send_error_response("Invalid vibration strength")
+                    return
+                
             # Validate parameters
             if not (0 <= hour <= 23):
                 self._send_error_response("Hour must be 0-23")
@@ -297,14 +311,14 @@ class BluetoothAlarmManager:
                 self._send_error_response("Minute must be 0-59")
                 return
                 
-            # Add alarm
-            success = self.alarm_clock.add_alarm(hour, minute, days, name, recurring)
+            # Add alarm (this will automatically save to file)
+            success = self.alarm_clock.add_alarm(hour, minute, days, name, recurring, vibration_strength)
             
             if success:
                 next_trigger = self.alarm_clock._calculate_next_trigger(self.alarm_clock.alarms[-1])
                 time_until = self.alarm_clock._format_time_until(next_trigger) if next_trigger else "unknown"
                 
-                response = f"OK:ADDED:{name}:{hour:02d}:{minute:02d}:{time_until}"
+                response = f"OK:ADDED:{name}:{hour:02d}:{minute:02d}:{time_until}:{vibration_strength}"
                 self._send_response(response)
             else:
                 self._send_error_response("Failed to add alarm")
@@ -327,6 +341,7 @@ class BluetoothAlarmManager:
             except ValueError:
                 pass  # Keep as string (name)
                 
+            # Remove alarm (this will automatically save to file)
             success = self.alarm_clock.remove_alarm(target)
             
             if success:
@@ -353,6 +368,7 @@ class BluetoothAlarmManager:
             except ValueError:
                 pass  # Keep as string (name)
                 
+            # Toggle alarm (this will automatically save to file)
             success = self.alarm_clock.toggle_alarm(target)
             
             if success:
@@ -390,8 +406,8 @@ class BluetoothAlarmManager:
                 next_trigger = self.alarm_clock._calculate_next_trigger(alarm)
                 time_until = self.alarm_clock._format_time_until(next_trigger) if next_trigger else "unknown"
                 
-                # Truncate name to reasonable size (max 12 chars)
-                alarm_name = alarm.name[:12] if len(alarm.name) > 12 else alarm.name
+                # Truncate name to reasonable size (max 20 chars instead of 12)
+                alarm_name = alarm.name[:30] if len(alarm.name) > 30 else alarm.name
                 
                 # Truncate time_until to reasonable size (max 25 chars)
                 if len(time_until) > 25:
@@ -399,16 +415,17 @@ class BluetoothAlarmManager:
                 
                 status = "ON" if alarm.enabled else "OFF"
                 rec = "R" if alarm.recurring else "O"
+                vibration_strength = getattr(alarm, 'vibration_strength', 75)  # Default to 75 for backward compatibility
                 
-                # Readable format: ALARM:INDEX:NAME:HH:MM:STATUS:TYPE:TIME_UNTIL
-                alarm_response = f"ALARM:{i}:{alarm_name}:{alarm.hour:02d}:{alarm.minute:02d}:{status}:{rec}:{time_until}"
+                # Readable format: ALARM:INDEX:NAME:HH:MM:STATUS:TYPE:TIME_UNTIL:VIBRATION_STRENGTH
+                alarm_response = f"ALARM:{i}:{alarm_name}:{alarm.hour:02d}:{alarm.minute:02d}:{status}:{rec}:{time_until}:{vibration_strength}"
                 
                 # Should now fit in larger MTU (aiming for <150 chars)
                 if len(alarm_response) > 150:
                     # Create shorter version if still too long
                     short_time = time_until[:15] + "..." if len(time_until) > 15 else time_until
-                    short_name = alarm_name[:8] if len(alarm_name) > 8 else alarm_name
-                    alarm_response = f"ALARM:{i}:{short_name}:{alarm.hour:02d}:{alarm.minute:02d}:{status}:{rec}:{short_time}"
+                    short_name = alarm_name[:15] if len(alarm_name) > 15 else alarm_name
+                    alarm_response = f"ALARM:{i}:{short_name}:{alarm.hour:02d}:{alarm.minute:02d}:{status}:{rec}:{short_time}:{vibration_strength}"
                 
                 self._send_response(alarm_response)
                 
@@ -443,6 +460,35 @@ class BluetoothAlarmManager:
             
         except Exception as e:
             self._send_error_response(f"Ping error: {e}")
+            
+    def _handle_vibration_preview_compact(self, command_str):
+        """Handle VIBRATION PREVIEW command - Format: vSTRENGTH (e.g., v75 for 75% strength)"""
+        try:
+            strength_str = command_str[1:].strip()  # Remove 'v' prefix
+            
+            # Default to 75% if no strength specified
+            strength = 75
+            if strength_str:
+                try:
+                    strength = int(strength_str)
+                    if not (0 <= strength <= 100):
+                        self._send_error_response("Strength must be 0-100")
+                        return
+                except ValueError:
+                    self._send_error_response("Invalid strength value")
+                    return
+            
+            # Import the preview function
+            from alarm import preview_vibration
+            
+            # Execute vibration preview
+            preview_vibration(strength, duration=1)  # 1 second preview
+            
+            response = f"OK:PREVIEW:{strength}"
+            self._send_response(response)
+            
+        except Exception as e:
+            self._send_error_response(f"Vibration preview error: {e}")
             
     def _send_response(self, response_str):
         """Send response via BLE (with larger MTU support)"""

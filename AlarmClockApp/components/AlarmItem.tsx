@@ -7,16 +7,12 @@ import { Alarm } from "../hooks/useAlarmClockBLE";
 interface AlarmItemProps {
   alarm: Alarm;
   onToggle: () => void;
-  onDelete: () => void;
+  onEdit: () => void;
 }
 
 const WEEKDAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
-export default function AlarmItem({
-  alarm,
-  onToggle,
-  onDelete,
-}: AlarmItemProps) {
+export default function AlarmItem({ alarm, onToggle, onEdit }: AlarmItemProps) {
   const formatTime = (hour: number, minute: number) => {
     const period = hour >= 12 ? "PM" : "AM";
     const displayHour = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour;
@@ -47,7 +43,11 @@ export default function AlarmItem({
     <View
       style={[styles.container, !alarm.enabled && styles.disabledContainer]}
     >
-      <View style={styles.content}>
+      <TouchableOpacity
+        style={styles.content}
+        onPress={onEdit}
+        activeOpacity={0.7}
+      >
         <View style={styles.timeSection}>
           <Text
             style={[styles.timeText, !alarm.enabled && styles.disabledText]}
@@ -60,42 +60,25 @@ export default function AlarmItem({
             >
               {alarm.name}
             </Text>
-            <View style={styles.typeIndicator}>
-              <Ionicons
-                name={alarm.recurring ? "repeat" : "play"}
-                size={12}
-                color={alarm.enabled ? "#007AFF" : "#999"}
-              />
-            </View>
           </View>
           <Text
             style={[styles.scheduleText, !alarm.enabled && styles.disabledText]}
           >
             {formatDays(alarm.days)}
           </Text>
-          {alarm.timeUntil &&
-            alarm.timeUntil !== "unknown" &&
-            alarm.enabled && (
-              <Text style={styles.nextAlarmText}>Next: {alarm.timeUntil}</Text>
-            )}
         </View>
 
-        <View style={styles.controls}>
+        <View style={styles.toggleContainer}>
           <Switch
+            style={styles.toggle}
             value={alarm.enabled}
             onValueChange={onToggle}
             trackColor={{ false: "#e1e5e9", true: "#007AFF" }}
             thumbColor={alarm.enabled ? "#fff" : "#f4f3f4"}
+            ios_backgroundColor="#e1e5e9"
           />
-          <TouchableOpacity
-            style={styles.deleteButton}
-            onPress={onDelete}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          >
-            <Ionicons name="trash-outline" size={20} color="#FF3B30" />
-          </TouchableOpacity>
         </View>
-      </View>
+      </TouchableOpacity>
     </View>
   );
 }
@@ -158,12 +141,10 @@ const styles = StyleSheet.create({
     color: "#007AFF",
     fontWeight: "500",
   },
-  controls: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 16,
+  toggleContainer: {
+    paddingLeft: 16,
   },
-  deleteButton: {
-    padding: 4,
+  toggle: {
+    transform: [{ scaleX: 1.2 }, { scaleY: 1.2 }],
   },
 });

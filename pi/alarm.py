@@ -1,12 +1,58 @@
-from machine import Pin, I2C
+from machine import Pin, I2C, PWM
 import time
 from picozero import pico_led # type: ignore
 import json
 from DS3231 import DS3231
 from bluetooth_alarm_manager import BluetoothAlarmManager
 
+# Button setup for alarm disable (GP0 with internal pull-up)
+button = Pin(0, Pin.IN, Pin.PULL_UP)
+BUTTON_HOLD_MS = 5_000  # 5 seconds to disable alarm
+
+# Motor control setup
+motor1a = PWM(Pin(14))
+motor1a.freq(1000)
+motor1b = PWM(Pin(15))
+motor1b.freq(1000)
+
+def motor_forward(strength=100):
+    """Move motor forward with specified strength (0-100)"""
+    duty_value = int((strength / 100) * 65535)
+    motor1a.duty_u16(duty_value)
+    motor1b.duty_u16(0)
+
+def motor_backward(strength=100):
+    """Move motor backward with specified strength (0-100)"""
+    duty_value = int((strength / 100) * 65535)
+    motor1a.duty_u16(0)
+    motor1b.duty_u16(duty_value)
+
+def motor_stop():
+    motor1a.duty_u16(0)
+    motor1b.duty_u16(0)
+
+def preview_vibration(strength=100, duration=2):
+    """Preview vibration at specified strength for testing"""
+    try:
+        print(f"🎯 Previewing vibration at {strength}% strength for {duration}s")
+        
+        # Brief vibration pattern for preview
+        for _ in range(duration):
+            motor_forward(strength)
+            time.sleep(0.25)
+            motor_backward(strength)
+            time.sleep(0.25)
+        
+        # Stop the motor when done
+        motor_stop()
+        print("✅ Vibration preview completed")
+        
+    except Exception as e:
+        print(f"❌ Error during vibration preview: {e}")
+        motor_stop()
+
 class Alarm:
-    def __init__(self, hour, minute, days=None, name="Alarm", enabled=True, recurring=True):
+    def __init__(self, hour, minute, days=None, name="Alarm", enabled=True, recurring=True, vibration_strength=75):
         """
         Create an alarm
         hour: 0-23
@@ -15,6 +61,7 @@ class Alarm:
         name: Alarm identifier
         enabled: Whether alarm is active
         recurring: True for repeating alarm, False for one-time
+        vibration_strength: Motor strength 0-100 (default 75%)
         """
         self.hour = hour
         self.minute = minute
@@ -22,7 +69,33 @@ class Alarm:
         self.name = name
         self.enabled = enabled
         self.recurring = recurring
+        self.vibration_strength = max(0, min(100, vibration_strength))  # Clamp to 0-100
         self.last_triggered = None
+        
+    def to_dict(self):
+        """Convert alarm to dictionary for JSON serialization"""
+        return {
+            'hour': self.hour,
+            'minute': self.minute,
+            'days': self.days,
+            'name': self.name,
+            'enabled': self.enabled,
+            'recurring': self.recurring,
+            'vibration_strength': self.vibration_strength
+        }
+    
+    @classmethod
+    def from_dict(cls, data):
+        """Create alarm from dictionary"""
+        return cls(
+            hour=data['hour'],
+            minute=data['minute'],
+            days=data.get('days'),
+            name=data.get('name', 'Alarm'),
+            enabled=data.get('enabled', True),
+            recurring=data.get('recurring', True),
+            vibration_strength=data.get('vibration_strength', 75)
+        )
         
     def should_trigger(self, current_time):
         if not self.enabled:
@@ -85,15 +158,57 @@ class Alarm:
         status = "ON" if self.enabled else "OFF"
         type_str = "Recurring" if self.recurring else "One-time"
         
-        return f"{self.name}: {self.hour:02d}:{self.minute:02d} ({days_str}) [{type_str}] [{status}]"
+        return f"{self.name}: {self.hour:02d}:{self.minute:02d} ({days_str}) [{type_str}] [{status}] [Vibration: {self.vibration_strength}%]"
 
 class AlarmClock:
-    def __init__(self, rtc):
+    def __init__(self, rtc, alarms_file="alarms.json"):
         self.rtc = rtc
         self.alarms = []
         self.alarm_duration = 5  # seconds
         self.snooze_duration = 60  # seconds
+        self.alarms_file = alarms_file
         
+        # Load existing alarms from file
+        self.load_alarms_from_file()
+        
+    def save_alarms_to_file(self):
+        """Save all alarms to JSON file"""
+        try:
+            alarm_data = [alarm.to_dict() for alarm in self.alarms]
+            with open(self.alarms_file, 'w') as f:
+                json.dump(alarm_data, f)
+            print(f"✅ Saved {len(self.alarms)} alarms to {self.alarms_file}")
+        except Exception as e:
+            print(f"❌ Error saving alarms to file: {e}")
+            
+    def load_alarms_from_file(self):
+        """Load alarms from JSON file"""
+        try:
+            with open(self.alarms_file, 'r') as f:
+                alarm_data = json.load(f)
+            
+            self.alarms = []
+            for data in alarm_data:
+                try:
+                    alarm = Alarm.from_dict(data)
+                    self.alarms.append(alarm)
+                    print(f"📋 Loaded alarm: {alarm.name} with vibration strength {alarm.vibration_strength}%")
+                except Exception as e:
+                    print(f"⚠️ Error loading alarm from data {data}: {e}")
+                    
+            print(f"✅ Loaded {len(self.alarms)} alarms from {self.alarms_file}")
+            return True
+            
+        except OSError:
+            # File doesn't exist - this is normal for first run
+            print(f"📝 No existing alarms file found. Starting with empty alarm list.")
+            self.alarms = []
+            return False
+        except Exception as e:
+            print(f"❌ Error loading alarms from file: {e}")
+            self.alarms = []
+            return False
+            
     def _calculate_next_trigger(self, alarm):
         """Calculate when an alarm will next trigger"""
         current_time = self.rtc.get_time()
@@ -204,7 +319,7 @@ class AlarmClock:
                 result += f" and {minutes} minute{'s' if minutes != 1 else ''}"
             return result
 
-    def add_alarm(self, hour, minute, days=None, name=None, recurring=True):
+    def add_alarm(self, hour, minute, days=None, name=None, recurring=True, vibration_strength=75):
         """Add a new alarm"""
         if name is None:
             name = f"Alarm {len(self.alarms) + 1}"
@@ -217,8 +332,15 @@ class AlarmClock:
             print("Error: Minute must be between 0-59")
             return False
             
-        alarm = Alarm(hour, minute, days, name, True, recurring)
+        if not (0 <= vibration_strength <= 100):
+            print("Error: Vibration strength must be between 0-100")
+            return False
+            
+        alarm = Alarm(hour, minute, days, name, True, recurring, vibration_strength)
         self.alarms.append(alarm)
+        
+        # Save alarms to file after adding
+        self.save_alarms_to_file()
         
         # Calculate and display next trigger time
         next_trigger = self._calculate_next_trigger(alarm)
@@ -239,12 +361,16 @@ class AlarmClock:
             if isinstance(name_or_index, int):
                 if 0 <= name_or_index < len(self.alarms):
                     removed = self.alarms.pop(name_or_index)
+                    # Save alarms to file after removing
+                    self.save_alarms_to_file()
                     print(f"Removed: {removed}")
                     return True
             else:
                 for i, alarm in enumerate(self.alarms):
                     if alarm.name == name_or_index:
                         removed = self.alarms.pop(i)
+                        # Save alarms to file after removing
+                        self.save_alarms_to_file()
                         print(f"Removed: {removed}")
                         return True
         except Exception as e:
@@ -258,6 +384,8 @@ class AlarmClock:
         alarm = self._get_alarm(name_or_index)
         if alarm:
             alarm.enabled = not alarm.enabled
+            # Save alarms to file after toggling
+            self.save_alarms_to_file()
             status = "enabled" if alarm.enabled else "disabled"
             print(f"Alarm '{alarm.name}' {status}")
             return True
@@ -289,31 +417,48 @@ class AlarmClock:
         print("==============\n")
         
     def trigger_alarm(self, alarm):
-        """Trigger alarm - flash LED"""
+        """Trigger alarm - activate motor"""
         try:
             print(f"\n🚨 ALARM: {alarm.name} - {alarm.hour:02d}:{alarm.minute:02d} 🚨")
+            print(f"🎯 Using vibration strength: {alarm.vibration_strength}%")
             
-            # Flash LED pattern for alarm
+            # Activate motor pattern for alarm
             for _ in range(self.alarm_duration):
-                pico_led.on()
+                motor_forward(alarm.vibration_strength)
                 time.sleep(0.5)
-                pico_led.off()
+                motor_backward(alarm.vibration_strength)
                 time.sleep(0.5)
+            
+            # Stop the motor when done
+            motor_stop()
+            print(f"✅ Alarm completed with {alarm.vibration_strength}% strength")
+                
+            # Save alarms after triggering (in case a one-time alarm was disabled)
+            self.save_alarms_to_file()
                 
         except Exception as e:
             print(f"Error triggering alarm: {e}")
+            motor_stop()
             
     def check_alarms(self, current_time):
         """Check if any alarms should trigger"""
         if not current_time:
             return
             
+        alarms_modified = False
         for alarm in self.alarms:
             try:
                 if alarm.should_trigger(current_time):
                     self.trigger_alarm(alarm)
+                    # Check if alarm was disabled (one-time alarms)
+                    if not alarm.enabled and not alarm.recurring:
+                        alarms_modified = True
             except Exception as e:
                 print(f"Error checking alarm '{alarm.name}': {e}")
+                
+        # Save if any alarms were modified (disabled one-time alarms)
+        if alarms_modified:
+            self.save_alarms_to_file()
                 
     def run(self, bluetooth_manager=None):
         """Main alarm clock loop with optional Bluetooth support"""
@@ -378,39 +523,33 @@ def setup_example_alarms():
     
     # Initialize I2C and RTC
     try:
-        i2c = I2C(0, scl=Pin(1), sda=Pin(0))
+        i2c = I2C(1, scl=Pin(27), sda=Pin(26))
         rtc = DS3231(i2c)
     except Exception as e:
         print(f"Error initializing I2C/RTC: {e}")
         return None, None
         
-    # Create alarm clock
+    # Create alarm clock (this will automatically load existing alarms)
     alarm_clock = AlarmClock(rtc)
     
     # Set current time (run once, then comment out)
     # rtc.set_time(2025, 5, 23, 14, 30, 0)  # YYYY, MM, DD, HH, MM, SS
     
-    # Add example alarms
-    
-    # Daily alarm at 7:00 AM
-    alarm_clock.add_alarm(19, 42, name="Morning Alarm", recurring=True)
-    
-    # Weekday alarm at 6:30 AM (Monday to Friday)
-    alarm_clock.add_alarm(6, 30, days=[0, 1, 2, 3, 4], name="Work Alarm", recurring=True)
-    
-    # Weekend alarm at 9:00 AM (Saturday and Sunday)
-    alarm_clock.add_alarm(9, 0, days=[5, 6], name="Weekend Alarm", recurring=True)
-    
-    # One-time alarm for today at current time + 2 minutes (for testing)
-    current_time = rtc.get_time()
-    if current_time:
-        year, month, day, hour, minute, second = current_time
-        test_minute = (minute + 2) % 60
-        test_hour = hour + (1 if minute + 2 >= 60 else 0)
-        alarm_clock.add_alarm(test_hour, test_minute, 
-                             days=(year, month, day), 
-                             name="Test Alarm", 
-                             recurring=False)
+    # Only add example alarms if no alarms were loaded from file
+    if len(alarm_clock.alarms) == 0:
+        print("🆕 No existing alarms found. Adding example alarms...")
+        
+        # Daily alarm at 7:00 AM
+        alarm_clock.add_alarm(7, 0, name="Morning Alarm", recurring=True)
+        
+        # Weekday alarm at 6:30 AM (Monday to Friday)
+        alarm_clock.add_alarm(6, 30, days=[0, 1, 2, 3, 4], name="Work Alarm", recurring=True)
+        
+        # Weekend alarm at 9:00 AM (Saturday and Sunday)
+        alarm_clock.add_alarm(9, 0, days=[5, 6], name="Weekend Alarm", recurring=True)
+        
+    else:
+        print(f"📋 Loaded {len(alarm_clock.alarms)} existing alarms from file")
     
     # Initialize Bluetooth manager
     try:
@@ -424,6 +563,11 @@ def setup_example_alarms():
 
 # Run the alarm clock
 if __name__ == "__main__":
+    # Set current time (run once, then comment out)
+    # i2c = I2C(1, scl=Pin(27), sda=Pin(26))
+    # rtc = DS3231(i2c)
+    # rtc.set_time(2025, 5, 27, 17, 31, 50)  # YYYY, MM, DD, HH, MM, SS
+
     alarm_clock, bluetooth_manager = setup_example_alarms()
     if alarm_clock:
         try:

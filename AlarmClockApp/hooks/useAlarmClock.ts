@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import useAlarmClockBLE, {
   Alarm,
   DeviceStatus,
@@ -20,6 +20,9 @@ export interface AlarmClockState {
 
   // Auto-connection
   isAutoConnecting: boolean;
+
+  // Time calculations
+  alarmsWithTimeUntil: Alarm[];
 }
 
 export interface AlarmClockActions {
@@ -30,14 +33,25 @@ export interface AlarmClockActions {
     minute: number,
     name?: string,
     days?: number[],
-    recurring?: boolean
+    recurring?: boolean,
+    vibration_strength?: number
   ) => Promise<boolean>;
   removeAlarm: (nameOrIndex: string | number) => Promise<boolean>;
   toggleAlarm: (nameOrIndex: string | number) => Promise<boolean>;
+  editAlarm: (
+    index: number,
+    hour: number,
+    minute: number,
+    name?: string,
+    days?: number[],
+    recurring?: boolean,
+    vibration_strength?: number
+  ) => Promise<boolean>;
 
   // Device
   getStatus: () => Promise<void>;
   ping: () => Promise<boolean>;
+  previewVibration: (strength?: number) => Promise<boolean>;
 
   // Error handling
   clearError: () => void;
@@ -52,12 +66,16 @@ export function useAlarmClock(): [AlarmClockState, AlarmClockActions] {
     useState<NodeJS.Timeout | null>(null);
   const [reconnectTimeoutId, setReconnectTimeoutId] =
     useState<NodeJS.Timeout | null>(null);
+  const [optimisticAlarms, setOptimisticAlarms] = useState<Alarm[]>([]);
+  const [useOptimisticState, setUseOptimisticState] = useState(false);
+  const [timeUpdateInterval, setTimeUpdateInterval] =
+    useState<NodeJS.Timeout | null>(null);
 
   // Use the new BLE hook
   const {
     connectionState,
     error,
-    alarms,
+    alarms: bleAlarms,
     deviceStatus,
     requestPermissions,
     scanForPeripherals,
@@ -67,12 +85,133 @@ export function useAlarmClock(): [AlarmClockState, AlarmClockActions] {
     addAlarm: bleAddAlarm,
     removeAlarm: bleRemoveAlarm,
     toggleAlarm: bleToggleAlarm,
+    editAlarm: bleEditAlarm,
     getStatus: bleGetStatus,
     ping: blePing,
+    previewVibration: blePreviewVibration,
     allDevices,
     onResponse,
     autoConnect: bleAutoConnect,
   } = useAlarmClockBLE();
+
+  // Calculate time until next alarm
+  const calculateTimeUntil = useCallback((alarm: Alarm): string => {
+    if (!alarm.enabled) return "disabled";
+
+    const now = new Date();
+    const currentHour = now.getHours();
+    const currentMinute = now.getMinutes();
+    const currentTime = currentHour * 60 + currentMinute;
+
+    // Convert alarm time to minutes
+    const alarmTime = alarm.hour * 60 + alarm.minute;
+
+    let targetDate = new Date();
+    let minutesDiff: number;
+
+    if (alarm.days && alarm.days.length > 0) {
+      // Weekday-based alarm
+      const currentDay = now.getDay(); // 0 = Sunday, 1 = Monday, etc.
+      const currentDayMapped = currentDay === 0 ? 6 : currentDay - 1; // Convert to 0 = Monday format
+
+      let nextAlarmDay = -1;
+
+      // Check if alarm could trigger today
+      if (alarm.days.includes(currentDayMapped) && alarmTime > currentTime) {
+        nextAlarmDay = currentDayMapped;
+      } else {
+        // Find next occurrence
+        for (let i = 1; i <= 7; i++) {
+          const checkDay = (currentDayMapped + i) % 7;
+          if (alarm.days.includes(checkDay)) {
+            nextAlarmDay = checkDay;
+            break;
+          }
+        }
+      }
+
+      if (nextAlarmDay === -1) return "unknown";
+
+      // Calculate days until
+      let daysUntil: number;
+      if (nextAlarmDay === currentDayMapped) {
+        daysUntil = 0;
+      } else if (nextAlarmDay > currentDayMapped) {
+        daysUntil = nextAlarmDay - currentDayMapped;
+      } else {
+        daysUntil = 7 - currentDayMapped + nextAlarmDay;
+      }
+
+      targetDate.setDate(targetDate.getDate() + daysUntil);
+      targetDate.setHours(alarm.hour, alarm.minute, 0, 0);
+
+      minutesDiff = Math.floor(
+        (targetDate.getTime() - now.getTime()) / (1000 * 60)
+      );
+    } else {
+      // Daily alarm
+      if (alarmTime > currentTime) {
+        // Today
+        targetDate.setHours(alarm.hour, alarm.minute, 0, 0);
+      } else {
+        // Tomorrow
+        targetDate.setDate(targetDate.getDate() + 1);
+        targetDate.setHours(alarm.hour, alarm.minute, 0, 0);
+      }
+
+      minutesDiff = Math.floor(
+        (targetDate.getTime() - now.getTime()) / (1000 * 60)
+      );
+    }
+
+    if (minutesDiff < 0) return "unknown";
+    if (minutesDiff === 0) return "now";
+    if (minutesDiff < 60) return `in ${minutesDiff}m`;
+    if (minutesDiff < 1440) {
+      const hours = Math.floor(minutesDiff / 60);
+      const minutes = minutesDiff % 60;
+      return minutes > 0 ? `in ${hours}h ${minutes}m` : `in ${hours}h`;
+    }
+
+    const days = Math.floor(minutesDiff / 1440);
+    const remainingHours = Math.floor((minutesDiff % 1440) / 60);
+    return remainingHours > 0
+      ? `in ${days}d ${remainingHours}h`
+      : `in ${days}d`;
+  }, []);
+
+  // Get the current alarms (either optimistic or BLE)
+  const currentAlarms = useOptimisticState ? optimisticAlarms : bleAlarms;
+
+  // Sort alarms by time and calculate time until
+  const alarmsWithTimeUntil = useMemo(() => {
+    const sortedAlarms = [...currentAlarms].sort((a, b) => {
+      // First sort by time (hour * 60 + minute)
+      const timeA = a.hour * 60 + a.minute;
+      const timeB = b.hour * 60 + b.minute;
+      return timeA - timeB;
+    });
+
+    // Add calculated time until for each alarm
+    return sortedAlarms.map((alarm) => ({
+      ...alarm,
+      timeUntil: calculateTimeUntil(alarm),
+    }));
+  }, [currentAlarms, calculateTimeUntil]);
+
+  // Auto-update time calculations every minute
+  useEffect(() => {
+    const interval = setInterval(() => {
+      // Force recalculation by updating dependency
+      setTimeUpdateInterval((prev) => prev);
+    }, 60000); // Update every minute
+
+    setTimeUpdateInterval(interval);
+
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, []);
 
   // Auto-reconnect logic
   useEffect(() => {
@@ -141,11 +280,23 @@ export function useAlarmClock(): [AlarmClockState, AlarmClockActions] {
     };
   }, [connectionState, bleAutoConnect, reconnectTimeoutId]);
 
+  // When BLE alarms update, clear optimistic state (only on manual refresh)
+  useEffect(() => {
+    if (bleAlarms.length > 0 && useOptimisticState && isLoading) {
+      // Only clear optimistic state during explicit loading (manual refresh)
+      // and when we've received the expected number of alarms
+      if (expectedAlarmCount > 0 && bleAlarms.length >= expectedAlarmCount) {
+        setUseOptimisticState(false);
+      }
+    }
+  }, [bleAlarms, useOptimisticState, isLoading, expectedAlarmCount]);
+
   // Define refreshAlarms first to avoid circular dependencies
   const refreshAlarms = useCallback(async (): Promise<void> => {
     if (connectionState !== "connected") return;
 
     setIsLoading(true);
+    setUseOptimisticState(false); // Clear optimistic updates
     await listAlarms();
 
     // Set loading to false after a timeout if no response
@@ -178,15 +329,17 @@ export function useAlarmClock(): [AlarmClockState, AlarmClockActions] {
         }
 
         setExpectedAlarmCount(count);
-        setIsLoading(count > 0);
 
-        // Set timeout to stop loading if we don't receive all alarms
-        if (count > 0) {
-          const timeoutId = setTimeout(() => {
-            console.log("⏰ Alarm loading timeout, stopping load");
-            setIsLoading(false);
-          }, 3000); // 3 second timeout
-          setLoadingTimeoutId(timeoutId);
+        // Only set loading state if this is a manual refresh
+        if (isLoading) {
+          // Set timeout to stop loading if we don't receive all alarms
+          if (count > 0) {
+            const timeoutId = setTimeout(() => {
+              console.log("⏰ Alarm loading timeout, stopping load");
+              setIsLoading(false);
+            }, 3000); // 3 second timeout
+            setLoadingTimeoutId(timeoutId);
+          }
         }
       } else if (response.startsWith("ALARM:") || response.startsWith("A")) {
         // Handle both original ALARM format and compact A format
@@ -203,15 +356,17 @@ export function useAlarmClock(): [AlarmClockState, AlarmClockActions] {
           clearTimeout(loadingTimeoutId);
           setLoadingTimeoutId(null);
         }
-        setIsLoading(false);
+        if (isLoading) {
+          setIsLoading(false);
+        }
       } else if (
         response.startsWith("OK:ADDED:") ||
         response.startsWith("OK:REMOVED:") ||
         response.startsWith("OK:TOGGLE:")
       ) {
-        // Operations completed, refresh alarms
-        console.log("🔄 Operation completed, refreshing alarms");
-        setTimeout(() => refreshAlarms(), 500);
+        // Operations completed - keep optimistic state, don't auto-clear
+        console.log("✅ Operation completed successfully");
+        // Don't automatically clear optimistic state anymore
       } else if (response.startsWith("HEARTBEAT:")) {
         // Just log heartbeat, no action needed
         console.log("💓 Heartbeat received");
@@ -219,11 +374,15 @@ export function useAlarmClock(): [AlarmClockState, AlarmClockActions] {
     });
 
     return unsubscribe;
-  }, [onResponse, refreshAlarms, loadingTimeoutId]);
+  }, [onResponse, loadingTimeoutId, isLoading]);
 
   // Check if we've received all expected alarms
   useEffect(() => {
-    if (expectedAlarmCount > 0 && alarms.length >= expectedAlarmCount) {
+    if (
+      expectedAlarmCount > 0 &&
+      bleAlarms.length >= expectedAlarmCount &&
+      isLoading
+    ) {
       console.log(
         `✅ Received all ${expectedAlarmCount} alarms, stopping load`
       );
@@ -234,7 +393,7 @@ export function useAlarmClock(): [AlarmClockState, AlarmClockActions] {
       setIsLoading(false);
       setExpectedAlarmCount(0);
     }
-  }, [alarms.length, expectedAlarmCount, loadingTimeoutId]);
+  }, [bleAlarms.length, expectedAlarmCount, loadingTimeoutId, isLoading]);
 
   // Cleanup timeout on unmount
   useEffect(() => {
@@ -245,8 +404,11 @@ export function useAlarmClock(): [AlarmClockState, AlarmClockActions] {
       if (reconnectTimeoutId) {
         clearTimeout(reconnectTimeoutId);
       }
+      if (timeUpdateInterval) {
+        clearInterval(timeUpdateInterval);
+      }
     };
-  }, [loadingTimeoutId, reconnectTimeoutId]);
+  }, [loadingTimeoutId, reconnectTimeoutId, timeUpdateInterval]);
 
   const getStatus = useCallback(async (): Promise<void> => {
     if (connectionState !== "connected") return;
@@ -259,40 +421,193 @@ export function useAlarmClock(): [AlarmClockState, AlarmClockActions] {
       minute: number,
       name?: string,
       days?: number[],
-      recurring: boolean = true
+      recurring: boolean = true,
+      vibration_strength?: number
     ): Promise<boolean> => {
       if (connectionState !== "connected") return false;
 
+      // Optimistic update
+      const newAlarm: Alarm = {
+        index: Math.max(...currentAlarms.map((a) => a.index), -1) + 1, // Generate next index
+        hour,
+        minute,
+        name: name || "New Alarm",
+        enabled: true,
+        recurring,
+        timeUntil: "calculating...",
+        days,
+        vibration_strength,
+      };
+
+      setOptimisticAlarms([...currentAlarms, newAlarm]);
+      setUseOptimisticState(true);
+
       setLastError(null);
-      return await bleAddAlarm(hour, minute, name, days, recurring);
+      const success = await bleAddAlarm(
+        hour,
+        minute,
+        name,
+        days,
+        recurring,
+        vibration_strength
+      );
+
+      if (!success) {
+        // Revert optimistic update on failure
+        setUseOptimisticState(false);
+      }
+
+      return success;
     },
-    [connectionState, bleAddAlarm]
+    [connectionState, bleAddAlarm, currentAlarms]
   );
 
   const removeAlarm = useCallback(
     async (nameOrIndex: string | number): Promise<boolean> => {
       if (connectionState !== "connected") return false;
 
+      // Find alarm to remove for optimistic update
+      let alarmToRemove: Alarm | undefined;
+      if (typeof nameOrIndex === "number") {
+        alarmToRemove = currentAlarms.find((a) => a.index === nameOrIndex);
+      } else {
+        alarmToRemove = currentAlarms.find((a) => a.name === nameOrIndex);
+      }
+
+      if (alarmToRemove) {
+        // Optimistic update
+        const updatedAlarms = currentAlarms.filter(
+          (a) => a.index !== alarmToRemove!.index
+        );
+        setOptimisticAlarms(updatedAlarms);
+        setUseOptimisticState(true);
+      }
+
       setLastError(null);
-      return await bleRemoveAlarm(nameOrIndex);
+      const success = await bleRemoveAlarm(nameOrIndex);
+
+      if (!success && alarmToRemove) {
+        // Revert optimistic update on failure
+        setUseOptimisticState(false);
+      }
+
+      return success;
     },
-    [connectionState, bleRemoveAlarm]
+    [connectionState, bleRemoveAlarm, currentAlarms]
   );
 
   const toggleAlarm = useCallback(
     async (nameOrIndex: string | number): Promise<boolean> => {
       if (connectionState !== "connected") return false;
 
+      // Find alarm to toggle for optimistic update
+      let alarmToToggle: Alarm | undefined;
+      if (typeof nameOrIndex === "number") {
+        alarmToToggle = currentAlarms.find((a) => a.index === nameOrIndex);
+      } else {
+        alarmToToggle = currentAlarms.find((a) => a.name === nameOrIndex);
+      }
+
+      if (alarmToToggle) {
+        // Optimistic update
+        const updatedAlarms = currentAlarms.map((a) =>
+          a.index === alarmToToggle!.index ? { ...a, enabled: !a.enabled } : a
+        );
+        setOptimisticAlarms(updatedAlarms);
+        setUseOptimisticState(true);
+      }
+
       setLastError(null);
-      return await bleToggleAlarm(nameOrIndex);
+      const success = await bleToggleAlarm(nameOrIndex);
+
+      if (!success && alarmToToggle) {
+        // Revert optimistic update on failure
+        setUseOptimisticState(false);
+      }
+
+      return success;
     },
-    [connectionState, bleToggleAlarm]
+    [connectionState, bleToggleAlarm, currentAlarms]
+  );
+
+  const editAlarm = useCallback(
+    async (
+      index: number,
+      hour: number,
+      minute: number,
+      name?: string,
+      days?: number[],
+      recurring: boolean = true,
+      vibration_strength?: number
+    ): Promise<boolean> => {
+      if (connectionState !== "connected") return false;
+
+      // Find alarm to edit for optimistic update
+      const alarmToEdit = currentAlarms.find((a) => a.index === index);
+
+      if (alarmToEdit) {
+        // Optimistic update
+        const updatedAlarm: Alarm = {
+          ...alarmToEdit,
+          hour,
+          minute,
+          name: name || alarmToEdit.name,
+          days,
+          recurring,
+          timeUntil: "calculating...",
+          vibration_strength,
+        };
+
+        const updatedAlarms = currentAlarms.map((a) =>
+          a.index === index ? updatedAlarm : a
+        );
+        setOptimisticAlarms(updatedAlarms);
+        setUseOptimisticState(true);
+      }
+
+      setLastError(null);
+
+      // First remove the old alarm, then add the new one
+      const removeSuccess = await bleRemoveAlarm(index);
+      if (!removeSuccess) {
+        if (alarmToEdit) {
+          setUseOptimisticState(false);
+        }
+        return false;
+      }
+
+      const addSuccess = await bleAddAlarm(
+        hour,
+        minute,
+        name,
+        days,
+        recurring,
+        vibration_strength
+      );
+      if (!addSuccess) {
+        if (alarmToEdit) {
+          setUseOptimisticState(false);
+        }
+        return false;
+      }
+
+      return true;
+    },
+    [connectionState, bleRemoveAlarm, bleAddAlarm, currentAlarms]
   );
 
   const ping = useCallback(async (): Promise<boolean> => {
     if (connectionState !== "connected") return false;
     return await blePing();
   }, [connectionState, blePing]);
+
+  const previewVibration = useCallback(
+    async (strength?: number): Promise<boolean> => {
+      if (connectionState !== "connected") return false;
+      return await blePreviewVibration(strength);
+    },
+    [connectionState, blePreviewVibration]
+  );
 
   const clearError = useCallback(() => {
     setLastError(null);
@@ -303,10 +618,11 @@ export function useAlarmClock(): [AlarmClockState, AlarmClockActions] {
     isConnecting:
       connectionState === "scanning" || connectionState === "connecting",
     lastError,
-    alarms,
+    alarms: currentAlarms,
     isLoading,
     deviceStatus,
     isAutoConnecting,
+    alarmsWithTimeUntil,
   };
 
   const actions: AlarmClockActions = {
@@ -314,8 +630,10 @@ export function useAlarmClock(): [AlarmClockState, AlarmClockActions] {
     addAlarm,
     removeAlarm,
     toggleAlarm,
+    editAlarm,
     getStatus,
     ping,
+    previewVibration,
     clearError,
   };
 

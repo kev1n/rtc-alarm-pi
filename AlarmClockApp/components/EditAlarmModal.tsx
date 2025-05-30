@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   StyleSheet,
   Text,
@@ -12,11 +12,14 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import CustomSlider from "./CustomSlider";
+import { Alarm } from "../hooks/useAlarmClockBLE";
 
-interface AddAlarmModalProps {
+interface EditAlarmModalProps {
   visible: boolean;
+  alarm: Alarm | null;
   onClose: () => void;
-  onAddAlarm: (
+  onEditAlarm: (
+    index: number,
     hour: number,
     minute: number,
     name?: string,
@@ -24,6 +27,7 @@ interface AddAlarmModalProps {
     recurring?: boolean,
     vibration_strength?: number
   ) => Promise<boolean>;
+  onDeleteAlarm: (index: number, name: string) => Promise<void>;
   onPreviewVibration?: (strength: number) => Promise<boolean>;
 }
 
@@ -37,29 +41,63 @@ const WEEKDAYS = [
   { index: 6, short: "S", long: "Sunday" },
 ];
 
-export default function AddAlarmModal({
+export default function EditAlarmModal({
   visible,
+  alarm,
   onClose,
-  onAddAlarm,
+  onEditAlarm,
+  onDeleteAlarm,
   onPreviewVibration,
-}: AddAlarmModalProps) {
-  const [hour, setHour] = useState(7);
+}: EditAlarmModalProps) {
+  const [hour, setHour] = useState(1);
   const [minute, setMinute] = useState(0);
   const [isAM, setIsAM] = useState(true);
   const [name, setName] = useState("");
   const [selectedDays, setSelectedDays] = useState<number[]>([]);
   const [recurring, setRecurring] = useState(true);
-  const [isAdding, setIsAdding] = useState(false);
-  const [vibrationStrength, setVibrationStrength] = useState(75); // 0-100 scale
+  const [isEditing, setIsEditing] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [vibrationStrength, setVibrationStrength] = useState(75);
+
+  const scrollViewRef = useRef<ScrollView>(null);
+
+  // Initialize form with alarm data when modal opens
+  useEffect(() => {
+    if (alarm && visible) {
+      // Convert 24-hour to 12-hour format
+      const hour12 =
+        alarm.hour === 0 ? 12 : alarm.hour > 12 ? alarm.hour - 12 : alarm.hour;
+      const am = alarm.hour < 12;
+
+      setHour(hour12);
+      setMinute(alarm.minute);
+      setIsAM(am);
+      setName(alarm.name);
+      setSelectedDays(alarm.days || []);
+      setRecurring(alarm.recurring);
+      setVibrationStrength(alarm.vibration_strength || 75);
+
+      // Auto-scroll to time picker after a short delay
+      setTimeout(() => {
+        scrollViewRef.current?.scrollTo({ y: 200, animated: true });
+      }, 300);
+    }
+  }, [alarm, visible]);
 
   const handleReset = () => {
-    setHour(7);
-    setMinute(0);
-    setIsAM(true);
-    setName("");
-    setSelectedDays([]);
-    setRecurring(true);
-    setVibrationStrength(75);
+    if (alarm) {
+      const hour12 =
+        alarm.hour === 0 ? 12 : alarm.hour > 12 ? alarm.hour - 12 : alarm.hour;
+      const am = alarm.hour < 12;
+
+      setHour(hour12);
+      setMinute(alarm.minute);
+      setIsAM(am);
+      setName(alarm.name);
+      setSelectedDays(alarm.days || []);
+      setRecurring(alarm.recurring);
+      setVibrationStrength(alarm.vibration_strength || 75);
+    }
   };
 
   const handleClose = () => {
@@ -138,15 +176,18 @@ export default function AddAlarmModal({
     return am ? hour12 : hour12 + 12;
   };
 
-  const handleAddAlarm = async () => {
-    setIsAdding(true);
+  const handleEditAlarm = async () => {
+    if (!alarm) return;
+
+    setIsEditing(true);
 
     try {
       const hour24 = convertTo24Hour(hour, isAM);
-      const alarmName = name.trim() || "New Alarm";
+      const alarmName = name.trim() || "Alarm";
       const days = selectedDays.length === 0 ? undefined : selectedDays;
 
-      const success = await onAddAlarm(
+      const success = await onEditAlarm(
+        alarm.index,
         hour24,
         minute,
         alarmName,
@@ -158,13 +199,40 @@ export default function AddAlarmModal({
       if (success) {
         handleClose();
       } else {
-        Alert.alert("Error", "Failed to add alarm. Please try again.");
+        Alert.alert("Error", "Failed to edit alarm. Please try again.");
       }
     } catch (error) {
       Alert.alert("Error", "An unexpected error occurred.");
     } finally {
-      setIsAdding(false);
+      setIsEditing(false);
     }
+  };
+
+  const handleDeleteAlarm = async () => {
+    if (!alarm) return;
+
+    Alert.alert(
+      "Delete Alarm",
+      `Are you sure you want to delete "${alarm.name}"?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            setIsDeleting(true);
+            try {
+              await onDeleteAlarm(alarm.index, alarm.name);
+              handleClose();
+            } catch (error) {
+              Alert.alert("Error", "Failed to delete alarm.");
+            } finally {
+              setIsDeleting(false);
+            }
+          },
+        },
+      ]
+    );
   };
 
   const handlePreviewVibration = async () => {
@@ -177,11 +245,13 @@ export default function AddAlarmModal({
     }
   };
 
+  if (!alarm) return null;
+
   return (
     <Modal
       visible={visible}
       animationType="slide"
-      presentationStyle="pageSheet"
+      presentationStyle="fullScreen"
       onRequestClose={handleClose}
     >
       <View style={styles.container}>
@@ -190,19 +260,31 @@ export default function AddAlarmModal({
           <TouchableOpacity onPress={handleClose} style={styles.headerButton}>
             <Text style={styles.cancelText}>Cancel</Text>
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>Add Alarm</Text>
+          <Text style={styles.headerTitle}>Edit Alarm</Text>
           <TouchableOpacity
-            onPress={handleAddAlarm}
-            style={[styles.headerButton, isAdding && styles.disabledButton]}
-            disabled={isAdding}
+            onPress={handleEditAlarm}
+            style={[
+              styles.headerButton,
+              (isEditing || isDeleting) && styles.disabledButton,
+            ]}
+            disabled={isEditing || isDeleting}
           >
-            <Text style={[styles.saveText, isAdding && styles.disabledText]}>
-              {isAdding ? "Adding..." : "Save"}
+            <Text
+              style={[
+                styles.saveText,
+                (isEditing || isDeleting) && styles.disabledText,
+              ]}
+            >
+              {isEditing ? "Saving..." : "Save"}
             </Text>
           </TouchableOpacity>
         </View>
 
-        <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+        <ScrollView
+          ref={scrollViewRef}
+          style={styles.content}
+          showsVerticalScrollIndicator={false}
+        >
           {/* Time Display */}
           <View style={styles.timeDisplay}>
             <Text style={styles.timeText}>
@@ -323,7 +405,7 @@ export default function AddAlarmModal({
               style={styles.nameInput}
               value={name}
               onChangeText={setName}
-              placeholder="Enter alarm name (optional)"
+              placeholder="Enter alarm name"
               placeholderTextColor="#999"
               maxLength={30}
             />
@@ -467,6 +549,20 @@ export default function AddAlarmModal({
             >
               <Ionicons name="play" size={16} color="#007AFF" />
               <Text style={styles.previewButtonText}>Preview</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Delete Section */}
+          <View style={styles.deleteSection}>
+            <TouchableOpacity
+              style={[styles.deleteButton, isDeleting && styles.disabledButton]}
+              onPress={handleDeleteAlarm}
+              disabled={isDeleting || isEditing}
+            >
+              <Ionicons name="trash-outline" size={20} color="#FF3B30" />
+              <Text style={styles.deleteButtonText}>
+                {isDeleting ? "Deleting..." : "Delete Alarm"}
+              </Text>
             </TouchableOpacity>
           </View>
         </ScrollView>
@@ -682,6 +778,29 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontWeight: "600",
   },
+  deleteSection: {
+    backgroundColor: "#fff",
+    marginBottom: 32,
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+  },
+  deleteButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 16,
+    paddingHorizontal: 20,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#FF3B30",
+    backgroundColor: "#FFF2F2",
+    gap: 8,
+  },
+  deleteButtonText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#FF3B30",
+  },
   sliderContainer: {
     flexDirection: "row",
     alignItems: "center",
@@ -693,20 +812,6 @@ const styles = StyleSheet.create({
   },
   slider: {
     flex: 1,
-  },
-  previewButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    padding: 12,
-    borderWidth: 1,
-    borderColor: "#e1e5e9",
-    borderRadius: 8,
-  },
-  previewButtonText: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: "#007AFF",
   },
   sectionHeader: {
     flexDirection: "row",
@@ -724,6 +829,21 @@ const styles = StyleSheet.create({
   },
   strengthBadgeText: {
     fontSize: 14,
+    fontWeight: "600",
+    color: "#007AFF",
+  },
+  previewButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#e1e5e9",
+    backgroundColor: "#fff",
+    gap: 8,
+  },
+  previewButtonText: {
+    fontSize: 16,
     fontWeight: "600",
     color: "#007AFF",
   },

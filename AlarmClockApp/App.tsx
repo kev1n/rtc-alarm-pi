@@ -14,11 +14,125 @@ import { Ionicons } from "@expo/vector-icons";
 import { useAlarmClock } from "./hooks/useAlarmClock";
 import AlarmItem from "./components/AlarmItem";
 import AddAlarmModal from "./components/AddAlarmModal";
+import EditAlarmModal from "./components/EditAlarmModal";
+import Toast from "./components/Toast";
 import ErrorBoundary from "./components/ErrorBoundary";
+import { Alarm } from "./hooks/useAlarmClockBLE";
 
 function AlarmClockApp() {
   const [alarmState, alarmActions] = useAlarmClock();
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [alarmToEdit, setAlarmToEdit] = useState<Alarm | null>(null);
+  const [toastVisible, setToastVisible] = useState(false);
+  const [toastMessage, setToastMessage] = useState("");
+  const [toastType, setToastType] = useState<"success" | "error" | "info">(
+    "success"
+  );
+
+  const calculateTimeUntilAlarm = (
+    hour: number,
+    minute: number,
+    alarmDays?: number[]
+  ): string => {
+    const now = new Date();
+    const currentHour = now.getHours();
+    const currentMinute = now.getMinutes();
+    const currentTime = currentHour * 60 + currentMinute;
+    const alarmTime = hour * 60 + minute;
+
+    let minutesDiff: number;
+
+    if (alarmDays && alarmDays.length > 0) {
+      // Weekday-based alarm
+      const currentDay = now.getDay(); // 0 = Sunday, 1 = Monday, etc.
+      const currentDayMapped = currentDay === 0 ? 6 : currentDay - 1; // Convert to 0 = Monday format
+
+      let nextAlarmDay = -1;
+
+      // Check if alarm could trigger today
+      if (alarmDays.includes(currentDayMapped) && alarmTime > currentTime) {
+        nextAlarmDay = currentDayMapped;
+      } else {
+        // Find next occurrence
+        for (let i = 1; i <= 7; i++) {
+          const checkDay = (currentDayMapped + i) % 7;
+          if (alarmDays.includes(checkDay)) {
+            nextAlarmDay = checkDay;
+            break;
+          }
+        }
+      }
+
+      if (nextAlarmDay === -1) return "";
+
+      // Calculate days until
+      let daysUntil: number;
+      if (nextAlarmDay === currentDayMapped) {
+        daysUntil = 0;
+      } else if (nextAlarmDay > currentDayMapped) {
+        daysUntil = nextAlarmDay - currentDayMapped;
+      } else {
+        daysUntil = 7 - currentDayMapped + nextAlarmDay;
+      }
+
+      const targetDate = new Date();
+      targetDate.setDate(targetDate.getDate() + daysUntil);
+      targetDate.setHours(hour, minute, 0, 0);
+
+      minutesDiff = Math.floor(
+        (targetDate.getTime() - now.getTime()) / (1000 * 60)
+      );
+    } else {
+      // Daily alarm
+      if (alarmTime > currentTime) {
+        // Today
+        const targetDate = new Date();
+        targetDate.setHours(hour, minute, 0, 0);
+        minutesDiff = Math.floor(
+          (targetDate.getTime() - now.getTime()) / (1000 * 60)
+        );
+      } else {
+        // Tomorrow
+        const targetDate = new Date();
+        targetDate.setDate(targetDate.getDate() + 1);
+        targetDate.setHours(hour, minute, 0, 0);
+        minutesDiff = Math.floor(
+          (targetDate.getTime() - now.getTime()) / (1000 * 60)
+        );
+      }
+    }
+
+    if (minutesDiff < 0) return "";
+    if (minutesDiff === 0) return "now";
+    if (minutesDiff < 60) return `${minutesDiff} minutes`;
+    if (minutesDiff < 1440) {
+      const hours = Math.floor(minutesDiff / 60);
+      const minutes = minutesDiff % 60;
+      return minutes > 0
+        ? `${hours} hours and ${minutes} minutes`
+        : `${hours} hours`;
+    }
+
+    const days = Math.floor(minutesDiff / 1440);
+    const remainingHours = Math.floor((minutesDiff % 1440) / 60);
+    return remainingHours > 0
+      ? `${days} days and ${remainingHours} hours`
+      : `${days} days`;
+  };
+
+  const showToast = (
+    message: string,
+    type: "success" | "error" | "info" = "success"
+  ) => {
+    setToastMessage(message);
+    setToastType(type);
+    setToastVisible(true);
+  };
+
+  const hideToast = () => {
+    setToastVisible(false);
+  };
 
   const handleToggleAlarm = async (index: number) => {
     const success = await alarmActions.toggleAlarm(index);
@@ -27,24 +141,90 @@ function AlarmClockApp() {
     }
   };
 
+  const handleEditAlarm = (alarm: Alarm) => {
+    setAlarmToEdit(alarm);
+    setShowEditModal(true);
+  };
+
+  const handleEditAlarmSave = async (
+    index: number,
+    hour: number,
+    minute: number,
+    name?: string,
+    days?: number[],
+    recurring?: boolean,
+    vibration_strength?: number
+  ) => {
+    const success = await alarmActions.editAlarm(
+      index,
+      hour,
+      minute,
+      name,
+      days,
+      recurring,
+      vibration_strength
+    );
+    if (!success && alarmState.lastError) {
+      Alert.alert("Error", alarmState.lastError);
+    } else if (success) {
+      const timeUntil = calculateTimeUntilAlarm(hour, minute, days);
+      if (timeUntil) {
+        showToast(`Alarm set for ${timeUntil}`);
+      } else {
+        showToast("Alarm updated successfully");
+      }
+    }
+    return success;
+  };
+
+  const handleAddAlarm = async (
+    hour: number,
+    minute: number,
+    name?: string,
+    days?: number[],
+    recurring?: boolean,
+    vibration_strength?: number
+  ) => {
+    const success = await alarmActions.addAlarm(
+      hour,
+      minute,
+      name,
+      days,
+      recurring,
+      vibration_strength
+    );
+    if (!success && alarmState.lastError) {
+      Alert.alert("Error", alarmState.lastError);
+    } else if (success) {
+      const timeUntil = calculateTimeUntilAlarm(hour, minute, days);
+      if (timeUntil) {
+        showToast(`Alarm set for ${timeUntil}`);
+      } else {
+        showToast("Alarm added successfully");
+      }
+    }
+    return success;
+  };
+
   const handleDeleteAlarm = async (index: number, name: string) => {
-    Alert.alert("Delete Alarm", `Are you sure you want to delete "${name}"?`, [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Delete",
-        style: "destructive",
-        onPress: async () => {
-          const success = await alarmActions.removeAlarm(index);
-          if (!success && alarmState.lastError) {
-            Alert.alert("Error", alarmState.lastError);
-          }
-        },
-      },
-    ]);
+    const success = await alarmActions.removeAlarm(index);
+    if (!success && alarmState.lastError) {
+      Alert.alert("Error", alarmState.lastError);
+    }
   };
 
   const handleRefresh = async () => {
     await alarmActions.refreshAlarms();
+  };
+
+  const handlePreviewVibration = async (strength: number): Promise<boolean> => {
+    const success = await alarmActions.previewVibration(strength);
+    if (!success && alarmState.lastError) {
+      Alert.alert("Error", alarmState.lastError);
+    } else if (success) {
+      showToast(`Vibration preview at ${strength}%`, "info");
+    }
+    return success;
   };
 
   const renderEmptyState = () => (
@@ -128,14 +308,14 @@ function AlarmClockApp() {
           />
         }
       >
-        {alarmState.alarms.length === 0
+        {alarmState.alarmsWithTimeUntil.length === 0
           ? renderEmptyState()
-          : alarmState.alarms.map((alarm) => (
+          : alarmState.alarmsWithTimeUntil.map((alarm) => (
               <AlarmItem
                 key={alarm.index}
                 alarm={alarm}
                 onToggle={() => handleToggleAlarm(alarm.index)}
-                onDelete={() => handleDeleteAlarm(alarm.index, alarm.name)}
+                onEdit={() => handleEditAlarm(alarm)}
               />
             ))}
       </ScrollView>
@@ -144,7 +324,29 @@ function AlarmClockApp() {
       <AddAlarmModal
         visible={showAddModal}
         onClose={() => setShowAddModal(false)}
-        onAddAlarm={alarmActions.addAlarm}
+        onAddAlarm={handleAddAlarm}
+        onPreviewVibration={handlePreviewVibration}
+      />
+
+      {/* Edit Alarm Modal */}
+      <EditAlarmModal
+        visible={showEditModal}
+        alarm={alarmToEdit}
+        onClose={() => {
+          setShowEditModal(false);
+          setAlarmToEdit(null);
+        }}
+        onEditAlarm={handleEditAlarmSave}
+        onDeleteAlarm={handleDeleteAlarm}
+        onPreviewVibration={handlePreviewVibration}
+      />
+
+      {/* Toast */}
+      <Toast
+        visible={toastVisible}
+        message={toastMessage}
+        type={toastType}
+        onHide={hideToast}
       />
     </SafeAreaView>
   );

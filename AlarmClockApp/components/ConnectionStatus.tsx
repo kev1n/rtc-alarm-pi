@@ -55,7 +55,7 @@ export default function ConnectionStatus({
         return {
           icon: "bluetooth" as const,
           color: "#34C759",
-          text: "Connected to Pi Alarm Clock",
+          text: "Connected to VibraWake",
           action: "Disconnect",
           onAction: onDisconnect,
         };

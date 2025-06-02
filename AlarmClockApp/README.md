@@ -1,4 +1,4 @@
-# Pi Alarm Clock - React Native App
+# VibraWake - React Native App
 
 A beautiful, native-looking React Native app for managing your Raspberry Pi Pico W alarm clock over Bluetooth Low Energy.
 
@@ -75,7 +75,7 @@ npm run web
 ### First-Time Setup
 
 1. **Ensure your Pi is running** - Make sure your Pi Pico alarm clock is powered on and advertising
-2. **Open the app** - Launch the Pi Alarm Clock app on your phone
+2. **Open the app** - Launch the VibraWake app on your phone
 3. **Connect to device** - Tap "Connect" to scan for and connect to your Pi
 4. **Start managing alarms** - Once connected, you can add, edit, and manage alarms
 
@@ -243,7 +243,7 @@ const [state, setState] = useState({
 
 ## 📚 Related Documentation
 
-- [Pi Alarm Clock Firmware](../pi/README.md) - Server-side documentation
+- [VibraWake Firmware](../pi/README.md) - Server-side documentation
 - [Bluetooth Test Client](../test_bluetooth/README.md) - Python testing tools
 - [Compact Protocol Spec](../test_bluetooth/COMPACT_PROTOCOL.md) - Communication protocol
 
@@ -257,4 +257,4 @@ const [state, setState] = useState({
 
 ## 📄 License
 
-This project is part of the Pi Alarm Clock system. See the main project LICENSE file for details.
+This project is part of the VibraWake system. See the main project LICENSE file for details.

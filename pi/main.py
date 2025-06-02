@@ -4,6 +4,8 @@ from picozero import pico_led # type: ignore
 import json
 from DS3231 import DS3231
 from bluetooth_alarm_manager import BluetoothAlarmManager
+from display_manager import DisplayManager
+from button_handler import ButtonHandler
 
 # Button setup for alarm disable (GP0 with internal pull-up)
 button = Pin(0, Pin.IN, Pin.PULL_UP)
@@ -11,9 +13,9 @@ BUTTON_HOLD_MS = 5_000  # 5 seconds to disable alarm
 
 # Motor control setup
 motor1a = PWM(Pin(14))
-motor1a.freq(1000)
+motor1a.freq(20000)
 motor1b = PWM(Pin(15))
-motor1b.freq(1000)
+motor1b.freq(20000)
 
 def motor_forward(strength=100):
     """Move motor forward with specified strength (0-100)"""
@@ -167,9 +169,19 @@ class AlarmClock:
         self.alarm_duration = 5  # seconds
         self.snooze_duration = 60  # seconds
         self.alarms_file = alarms_file
+        self.display_manager = None  # Will be set later
         
         # Load existing alarms from file
         self.load_alarms_from_file()
+        
+    def set_display_manager(self, display_manager):
+        """Set the display manager reference for immediate updates"""
+        self.display_manager = display_manager
+        
+    def _notify_display_change(self):
+        """Notify display manager of alarm changes for immediate update"""
+        if self.display_manager and hasattr(self.display_manager, 'force_update_display'):
+            self.display_manager.force_update_display()
         
     def save_alarms_to_file(self):
         """Save all alarms to JSON file"""
@@ -186,6 +198,7 @@ class AlarmClock:
         try:
             with open(self.alarms_file, 'r') as f:
                 alarm_data = json.load(f)
+                print(f"📋 Loaded alarm data: {alarm_data}")
             
             self.alarms = []
             for data in alarm_data:
@@ -342,6 +355,9 @@ class AlarmClock:
         # Save alarms to file after adding
         self.save_alarms_to_file()
         
+        # Notify display manager for immediate update
+        self._notify_display_change()
+        
         # Calculate and display next trigger time
         next_trigger = self._calculate_next_trigger(alarm)
         if next_trigger:
@@ -363,6 +379,8 @@ class AlarmClock:
                     removed = self.alarms.pop(name_or_index)
                     # Save alarms to file after removing
                     self.save_alarms_to_file()
+                    # Notify display manager for immediate update
+                    self._notify_display_change()
                     print(f"Removed: {removed}")
                     return True
             else:
@@ -371,6 +389,8 @@ class AlarmClock:
                         removed = self.alarms.pop(i)
                         # Save alarms to file after removing
                         self.save_alarms_to_file()
+                        # Notify display manager for immediate update
+                        self._notify_display_change()
                         print(f"Removed: {removed}")
                         return True
         except Exception as e:
@@ -386,6 +406,8 @@ class AlarmClock:
             alarm.enabled = not alarm.enabled
             # Save alarms to file after toggling
             self.save_alarms_to_file()
+            # Notify display manager for immediate update
+            self._notify_display_change()
             status = "enabled" if alarm.enabled else "disabled"
             print(f"Alarm '{alarm.name}' {status}")
             return True
@@ -417,28 +439,79 @@ class AlarmClock:
         print("==============\n")
         
     def trigger_alarm(self, alarm):
-        """Trigger alarm - activate motor"""
+        """Trigger alarm - activate motor until button is held for 5 seconds"""
         try:
             print(f"\n🚨 ALARM: {alarm.name} - {alarm.hour:02d}:{alarm.minute:02d} 🚨")
             print(f"🎯 Using vibration strength: {alarm.vibration_strength}%")
+            print("🔘 Hold button for 5 seconds to stop alarm")
             
-            # Activate motor pattern for alarm
-            for _ in range(self.alarm_duration):
-                motor_forward(alarm.vibration_strength)
-                time.sleep(0.5)
-                motor_backward(alarm.vibration_strength)
-                time.sleep(0.5)
+            # Set alarm active in button handler if available
+            if hasattr(self, 'button_handler') and self.button_handler:
+                self.button_handler.set_alarm_active(True)
+            
+            alarm_active = True
+            cycle_start = time.ticks_ms()
+            
+            while alarm_active:
+                # Check button state using button handler if available
+                if hasattr(self, 'button_handler') and self.button_handler:
+                    if self.button_handler.run_button_tasks():
+                        alarm_active = False
+                        break
+                else:
+                    # Fallback to original button handling
+                    if button.value() == 0:  # pressed pulls it LOW
+                        if button_start is None:
+                            button_start = time.ticks_ms()
+                            print("🔘 Button pressed - hold for 5 seconds to stop alarm")
+                        elif time.ticks_diff(time.ticks_ms(), button_start) >= BUTTON_HOLD_MS:
+                            print("✅ Button held for 5 seconds - stopping alarm!")
+                            alarm_active = False
+                            break
+                    else:
+                        if button_start is not None:
+                            print("🔘 Button released - alarm continues")
+                        button_start = None  # reset if released
+                
+                # Motor vibration pattern (0.5 second cycles)
+                current_time = time.ticks_ms()
+                cycle_time = time.ticks_diff(current_time, cycle_start)
+                
+                if cycle_time < 500:
+                    motor_forward(alarm.vibration_strength)
+                elif cycle_time < 1000:
+                    motor_backward(alarm.vibration_strength)
+                else:
+                    cycle_start = current_time  # reset cycle
+                
+                # Small delay to prevent excessive CPU usage and allow button checking
+                time.sleep_ms(50)
+            
+            # Set alarm inactive in button handler
+            if hasattr(self, 'button_handler') and self.button_handler:
+                self.button_handler.set_alarm_active(False)
             
             # Stop the motor when done
             motor_stop()
-            print(f"✅ Alarm completed with {alarm.vibration_strength}% strength")
+            print(f"✅ Alarm stopped")
+            
+            # Disable non-recurring alarms after they finish
+            if not alarm.recurring:
+                alarm.enabled = False
+                print(f"🔔 One-time alarm '{alarm.name}' disabled after ringing")
                 
-            # Save alarms after triggering (in case a one-time alarm was disabled)
+            # Save alarms after triggering (for disabled one-time alarms or any changes)
             self.save_alarms_to_file()
+            
+            # Notify display manager for immediate update
+            self._notify_display_change()
                 
         except Exception as e:
             print(f"Error triggering alarm: {e}")
             motor_stop()
+            # Ensure alarm is set inactive on error
+            if hasattr(self, 'button_handler') and self.button_handler:
+                self.button_handler.set_alarm_active(False)
             
     def check_alarms(self, current_time):
         """Check if any alarms should trigger"""
@@ -449,9 +522,12 @@ class AlarmClock:
         for alarm in self.alarms:
             try:
                 if alarm.should_trigger(current_time):
+                    print(f"🔔 Triggering alarm: {alarm.name} ({'One-time' if not alarm.recurring else 'Recurring'})")
                     self.trigger_alarm(alarm)
-                    # Check if alarm was disabled (one-time alarms)
-                    if not alarm.enabled and not alarm.recurring:
+                    
+                    # Check if alarm was disabled (one-time alarms get disabled in should_trigger)
+                    if not alarm.enabled:
+                        print(f"🔔 One-time alarm '{alarm.name}' was disabled after triggering")
                         alarms_modified = True
             except Exception as e:
                 print(f"Error checking alarm '{alarm.name}': {e}")
@@ -459,15 +535,23 @@ class AlarmClock:
         # Save if any alarms were modified (disabled one-time alarms)
         if alarms_modified:
             self.save_alarms_to_file()
+            self._notify_display_change()
+            print("💾 Saved alarm changes after one-time alarm triggered")
                 
-    def run(self, bluetooth_manager=None):
-        """Main alarm clock loop with optional Bluetooth support"""
+    def run(self, bluetooth_manager=None, display_manager=None, button_handler=None):
+        """Main alarm clock loop with optional Bluetooth and display support"""
         print("🕐 Alarm Clock Started 🕐")
         self.list_alarms()
+        
+        # Store references for alarm triggering
+        self.button_handler = button_handler
         
         if bluetooth_manager:
             print("🔵 Bluetooth support enabled")
             bluetooth_manager.start_advertising()
+            
+        if display_manager:
+            print("📺 Display support enabled")
         
         consecutive_errors = 0
         max_errors = 5
@@ -489,6 +573,14 @@ class AlarmClock:
                     # Run Bluetooth tasks if available
                     if bluetooth_manager:
                         bluetooth_manager.run_bluetooth_tasks()
+                    
+                    # Run display tasks if available
+                    if display_manager:
+                        display_manager.run_display_tasks()
+                        
+                    # Run button tasks if available
+                    if button_handler:
+                        button_handler.run_button_tasks()
                     
                     # Blink LED every 5 seconds (original functionality)
                     if second % 5 == 0:
@@ -527,7 +619,7 @@ def setup_example_alarms():
         rtc = DS3231(i2c)
     except Exception as e:
         print(f"Error initializing I2C/RTC: {e}")
-        return None, None
+        return None, None, None, None
         
     # Create alarm clock (this will automatically load existing alarms)
     alarm_clock = AlarmClock(rtc)
@@ -540,39 +632,70 @@ def setup_example_alarms():
         print("🆕 No existing alarms found. Adding example alarms...")
         
         # Daily alarm at 7:00 AM
-        alarm_clock.add_alarm(7, 0, name="Morning Alarm", recurring=True)
+        alarm_clock.add_alarm(7, 0, name="Morning", recurring=True, vibration_strength=50)
         
         # Weekday alarm at 6:30 AM (Monday to Friday)
-        alarm_clock.add_alarm(6, 30, days=[0, 1, 2, 3, 4], name="Work Alarm", recurring=True)
+        alarm_clock.add_alarm(6, 30, days=[0, 1, 2, 3, 4], name="Work", recurring=True, vibration_strength=75)
         
         # Weekend alarm at 9:00 AM (Saturday and Sunday)
-        alarm_clock.add_alarm(9, 0, days=[5, 6], name="Weekend Alarm", recurring=True)
+        alarm_clock.add_alarm(9, 0, days=[5, 6], name="Weekend", recurring=True, vibration_strength=30)
         
     else:
         print(f"📋 Loaded {len(alarm_clock.alarms)} existing alarms from file")
     
     # Initialize Bluetooth manager
+    bluetooth_manager = None
     try:
         bluetooth_manager = BluetoothAlarmManager(alarm_clock, "PicoAlarmClock")
         print("✅ Bluetooth manager initialized successfully")
-        return alarm_clock, bluetooth_manager
     except Exception as e:
         print(f"⚠️ Bluetooth initialization failed: {e}")
         print("📱 Running without Bluetooth support")
-        return alarm_clock, None
+    
+    # Initialize Display manager
+    display_manager = None
+    try:
+        display_manager = DisplayManager(rtc, alarm_clock, bluetooth_manager)
+        if display_manager.is_available():
+            # Link display manager to alarm clock for immediate updates
+            alarm_clock.set_display_manager(display_manager)
+            print("✅ Display manager initialized successfully")
+        else:
+            display_manager = None
+    except Exception as e:
+        print(f"⚠️ Display initialization failed: {e}")
+        print("📺 Running without display support")
+        display_manager = None
+    
+    # Initialize Button handler
+    button_handler = None
+    try:
+        button_handler = ButtonHandler(display_manager)
+        print("✅ Button handler initialized successfully")
+    except Exception as e:
+        print(f"⚠️ Button handler initialization failed: {e}")
+        print("🔘 Running without enhanced button support")
+        button_handler = None
+    
+    return alarm_clock, bluetooth_manager, display_manager, button_handler
 
 # Run the alarm clock
-if __name__ == "__main__":
+# if __name__ == "__main__":
     # Set current time (run once, then comment out)
     # i2c = I2C(1, scl=Pin(27), sda=Pin(26))
     # rtc = DS3231(i2c)
     # rtc.set_time(2025, 5, 27, 17, 31, 50)  # YYYY, MM, DD, HH, MM, SS
+    
+    # vibrate the motor for 1 second after immediate start
+motor_forward(10)
+time.sleep(1)
+motor_stop()
 
-    alarm_clock, bluetooth_manager = setup_example_alarms()
-    if alarm_clock:
-        try:
-            alarm_clock.run(bluetooth_manager)
-        except Exception as e:
-            print(f"Fatal error: {e}")
-            # Keep LED off on exit
-            pico_led.off()
+alarm_clock, bluetooth_manager, display_manager, button_handler = setup_example_alarms()
+if alarm_clock:
+    try:
+        alarm_clock.run(bluetooth_manager, display_manager, button_handler)
+    except Exception as e:
+        print(f"Fatal error: {e}")
+        # Keep LED off on exit
+        pico_led.off()

@@ -57,8 +57,8 @@ export default function DeviceSelectionModal({
       </Text>
       <Text style={styles.emptyStateSubtitle}>
         {isScanning
-          ? "Looking for your Pi Alarm Clock"
-          : "Make sure your Pi Alarm Clock is powered on and in range"}
+          ? "Looking for your VibraWake"
+          : "Make sure your VibraWake is powered on and in range"}
       </Text>
       {!isScanning && (
         <TouchableOpacity style={styles.retryButton} onPress={onRefreshScan}>

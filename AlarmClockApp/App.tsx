@@ -236,19 +236,19 @@ function AlarmClockApp() {
           ? "Tap the + button to add your first alarm"
           : alarmState.isAutoConnecting
           ? "Connecting to your alarm clock..."
-          : "Make sure your Pi Alarm Clock is nearby and powered on"}
+          : "Make sure your VibraWake is nearby and powered on"}
       </Text>
     </View>
   );
 
   const getHeaderTitle = () => {
     if (alarmState.connectionState === "connecting") {
-      return "Pi Alarm Clock - Connecting...";
+      return "VibraWake - Connecting...";
     }
     if (alarmState.connectionState === "connected") {
-      return "Pi Alarm Clock";
+      return "VibraWake";
     }
-    return "Pi Alarm Clock - Offline";
+    return "VibraWake - Offline";
   };
 
   const getConnectionIndicator = () => {

@@ -479,7 +479,7 @@ class BluetoothAlarmManager:
                     return
             
             # Import the preview function
-            from alarm import preview_vibration
+            from pi.main import preview_vibration
             
             # Execute vibration preview
             preview_vibration(strength, duration=1)  # 1 second preview

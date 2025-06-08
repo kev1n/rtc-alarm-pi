@@ -45,7 +45,7 @@ def preview_vibration(strength=100, duration=2):
             motor_backward(strength)
             time.sleep(0.25)
         
-        # Stop the motor when done
+        # Ensure motor is stopped
         motor_stop()
         print("✅ Vibration preview completed")
         
@@ -646,7 +646,7 @@ def setup_example_alarms():
     # Initialize Bluetooth manager
     bluetooth_manager = None
     try:
-        bluetooth_manager = BluetoothAlarmManager(alarm_clock, "PicoAlarmClock")
+        bluetooth_manager = BluetoothAlarmManager(alarm_clock, "PicoAlarmClock", preview_vibration)
         print("✅ Bluetooth manager initialized successfully")
     except Exception as e:
         print(f"⚠️ Bluetooth initialization failed: {e}")
@@ -687,9 +687,14 @@ def setup_example_alarms():
     # rtc.set_time(2025, 5, 27, 17, 31, 50)  # YYYY, MM, DD, HH, MM, SS
     
     # vibrate the motor for 1 second after immediate start
-motor_forward(10)
-time.sleep(1)
-motor_stop()
+    
+# set the time to 8:59:30 AM
+i2c = I2C(1, scl=Pin(27), sda=Pin(26))
+rtc = DS3231(i2c)
+rtc.set_time(2025, 5, 27, 8, 59, 30)
+# motor_forward(10)
+# time.sleep(1)
+# motor_stop()
 
 alarm_clock, bluetooth_manager, display_manager, button_handler = setup_example_alarms()
 if alarm_clock:

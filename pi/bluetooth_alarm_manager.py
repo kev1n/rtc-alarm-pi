@@ -23,9 +23,10 @@ _FLAG_WRITE = const(0x08)
 _FLAG_NOTIFY = const(0x10)
 
 class BluetoothAlarmManager:
-    def __init__(self, alarm_clock, device_name="PicoAlarmClock"):
+    def __init__(self, alarm_clock, device_name="PicoAlarmClock", preview_vibration_func=None):
         self.alarm_clock = alarm_clock
         self.device_name = device_name
+        self.preview_vibration_func = preview_vibration_func  # Store reference to preview function
         
         # BLE setup
         self.ble = bluetooth.BLE()
@@ -478,11 +479,13 @@ class BluetoothAlarmManager:
                     self._send_error_response("Invalid strength value")
                     return
             
-            # Import the preview function
-            from pi.main import preview_vibration
+            # Check if preview function is available
+            if self.preview_vibration_func is None:
+                self._send_error_response("Vibration preview not available")
+                return
             
             # Execute vibration preview
-            preview_vibration(strength, duration=1)  # 1 second preview
+            self.preview_vibration_func(strength, duration=1)  # 1 second preview
             
             response = f"OK:PREVIEW:{strength}"
             self._send_response(response)

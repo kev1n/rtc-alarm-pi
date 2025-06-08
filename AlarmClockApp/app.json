@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "BLEExpoBlog",
-    "slug": "BLEExpoBlog",
+    "name": "VibraWake",
+    "slug": "VibraWake",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -12,7 +12,7 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.wa2goose.BLEExpoBlog"
+      "bundleIdentifier": "com.kwang30.VibraWake"
     },
     "android": {
       "adaptiveIcon": {
@@ -24,7 +24,7 @@
         "android.permission.BLUETOOTH_ADMIN",
         "android.permission.BLUETOOTH_CONNECT"
       ],
-      "package": "com.wa2goose.BLEExpoBlog"
+      "package": "com.kwang30.VibraWake"
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -45,8 +45,9 @@
     ],
     "extra": {
       "eas": {
-        "projectId": "74947d12-8ffc-45e8-b924-1c2d45cbe5eb"
+        "projectId": "da029df3-fb13-4070-a414-214af7ec3b5c"
       }
-    }
+    },
+    "owner": "kwang30"
   }
 }

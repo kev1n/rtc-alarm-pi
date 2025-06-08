@@ -18,7 +18,7 @@ button_thread_depth = 3; // Reduced thickness for threading
 
 // OLED display dimensions
 oled_width = 27.4;
-oled_height = 19.1;
+oled_height = 20;
 oled_mounting_hole_diameter = 2.5; // Standard M2.5 screws
 oled_mounting_spacing_x = 25;      // Approximate spacing between holes
 oled_mounting_spacing_y = 15;      // Approximate spacing between holes
@@ -56,14 +56,15 @@ lip_height = 1;
 lip_thickness = 1.2; // Increased from 0.8 for looser fit
 
 // Main assembly - choose what to render
-render_main_body = true;
+render_main_body = false;
 render_top = false;
-render_assembled = false; // Set to true to see assembled view
+render_assembled = true; // Set to true to see assembled view
 
 if (render_assembled) {
     // Assembled view
     main_body();
-    translate([0, 0, external_height]) top_lid();
+    translate([wall_thickness + fit_clearance, wall_thickness + fit_clearance, external_height]) top_lid();
+
 } else {
     // Separate parts for printing
     if (render_main_body) {
@@ -133,7 +134,7 @@ module front_panel_cutouts() {
     hole_depth = wall_thickness + 10; // Extend into internal cavity
     
     // Bottom left
-    translate([start_x + hole_inset - oled_mounting_hole_diameter/2 + 2, -1, 2 + oled_center_z - oled_height/2 - bottom_hole_offset - oled_mounting_hole_diameter/2])
+    translate([start_x + hole_inset - oled_mounting_hole_diameter/2 + 1, -1, 2 + oled_center_z - oled_height/2 - bottom_hole_offset - oled_mounting_hole_diameter/2])
     cube([oled_mounting_hole_diameter, hole_depth, oled_mounting_hole_diameter]);
     
     // Bottom right
@@ -141,7 +142,7 @@ module front_panel_cutouts() {
     cube([oled_mounting_hole_diameter, hole_depth, oled_mounting_hole_diameter]);
     
     // Top left
-    translate([start_x + hole_inset - oled_mounting_hole_diameter/2, -1, oled_center_z + oled_height/2 + 1 - oled_mounting_hole_diameter/2])
+    translate([start_x + hole_inset - oled_mounting_hole_diameter/2 + 1, -1, oled_center_z + oled_height/2 + 1 - oled_mounting_hole_diameter/2])
     cube([oled_mounting_hole_diameter, hole_depth, oled_mounting_hole_diameter]);
     
     // Top right
